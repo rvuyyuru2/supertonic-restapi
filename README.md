@@ -14,20 +14,32 @@ This is a production-ready, OpenAI-compatible text-to-speech API using [Superton
 
 1. **Setup**:
    ```bash
-   ./setup.sh
+   ./scripts/setup.sh
    ```
 
 2. **Run**:
    ```bash
-   ./start.sh
+   ./scripts/start.sh
    # Server listens on http://0.0.0.0:8800
    ```
 
 ## Production Deployment (Docker)
 
-### GPU (NVIDIA)
-Ensure you have the NVIDIA Container Toolkit installed.
+The easiest way to run in production is using Docker Compose, which includes an Nginx load balancer.
 
+### Using Docker Compose
+1. **Start**:
+   ```bash
+   docker compose up -d
+   ```
+
+2. **Scale**:
+   ```bash
+   # Scale to 3 worker instances
+   docker compose up -d --scale api=3
+   ```
+
+### Individual Image
 1. **Build**:
    ```bash
    docker build -t supertonic-tts .
@@ -35,18 +47,11 @@ Ensure you have the NVIDIA Container Toolkit installed.
 
 2. **Run**:
    ```bash
-   docker run --gpus all -p 8800:8800 supertonic-tts
-   ```
-
-### Mac / CPU
-1. **Build**:
-   ```bash
-   docker build -t supertonic-tts .
-   ```
-
-2. **Run**:
-   ```bash
+   # CPU / Mac (Recommended for Docker on Mac)
    docker run -p 8800:8800 supertonic-tts
+
+   # NVIDIA GPU (Requires nvidia-container-toolkit)
+   docker run --gpus all -p 8800:8800 supertonic-tts
    ```
 
 ## Configuration (.env)
