@@ -1,14 +1,7 @@
 import math
-import struct
-import time
-from io import BytesIO
-from typing import Tuple
 
 import numpy as np
-import scipy.io.wavfile as wavfile
-import soundfile as sf
 from loguru import logger
-from pydub import AudioSegment
 
 from app.core.config import settings
 from app.inference.base import AudioChunk
