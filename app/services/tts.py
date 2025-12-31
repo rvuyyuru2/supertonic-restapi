@@ -62,6 +62,7 @@ class TTSService:
         kwargs = {}
         if settings.MODEL_THREADS > 0:
             kwargs['intra_op_num_threads'] = settings.MODEL_THREADS
+            kwargs['inter_op_num_threads'] = settings.MODEL_INTER_THREADS
             
         self.model = TTS(auto_download=True, **kwargs)
         logger.info("Supertonic TTS Model initialized.")

@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     HOST: str = "0.0.0.0"
     PORT: int = 8800
-    MODEL_THREADS: int = 0
+    MODEL_THREADS: int = 12
+    MODEL_INTER_THREADS: int = 12
     FORCE_PROVIDERS: str = "metal" # auto, cuda, coreml, cpu, metal
     MAX_WORKERS: int = 8
     MAX_CHUNK_LENGTH: int = 300
