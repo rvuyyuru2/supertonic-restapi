@@ -7,7 +7,8 @@ services:
       - PORT=8800
       - HOST=0.0.0.0
       - LOG_LEVEL=INFO
-      - MAX_WORKERS=4  # Lowering per replica to allow stacking
+      - MAX_WORKERS=4  # Threads per worker
+      - WEB_CONCURRENCY=2 # Gunicorn workers
     volumes:
       - ./db.sqlite3:/app/db.sqlite3
       - model_cache:/root/.cache

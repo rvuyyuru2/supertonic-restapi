@@ -19,12 +19,13 @@ COPY app/ ./app/
 # Environment variables
 ENV PORT=8800
 ENV HOST=0.0.0.0
-ENV MODEL_THREADS=0 
-ENV WEB_CONCURRENCY=1 
+ENV MODEL_THREADS=1 
+ENV WEB_CONCURRENCY=2
+ENV MAX_WORKERS=4
 ENV TIMEOUT=120
 ENV PYTHONPATH=/app
 
 EXPOSE 8800
 
 # Start with Gunicorn + Uvicorn
-CMD exec gunicorn -k uvicorn.workers.UvicornWorker -w $WEB_CONCURRENCY --threads 4 --timeout $TIMEOUT --bind $HOST:$PORT app.main:app
+CMD exec gunicorn -k uvicorn.workers.UvicornWorker -w $WEB_CONCURRENCY --threads $MAX_WORKERS --timeout $TIMEOUT --bind $HOST:$PORT app.main:app

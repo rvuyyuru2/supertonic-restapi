@@ -12,3 +12,6 @@ tortoise-orm>=0.20.0
 pydantic-settings
 anyio
 httpx
+av
+loguru
+pydub

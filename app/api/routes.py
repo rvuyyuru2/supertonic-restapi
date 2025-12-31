@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
 import onnxruntime as ort
 from concurrent.futures import ThreadPoolExecutor
 import io
 import asyncio
 import soundfile as sf
+import time
 from app.core.config import settings
 from app.api.schemas import OpenAIInput, ModelList
 from app.services.tts import tts_service
@@ -12,144 +13,101 @@ from app.utils.text import split_text_into_chunks, clean_text
 from app.core.logging import logger
 from app.core.database import verify_api_key, track_usage
 from app.api.auth.models import ApiKey
+from app.services.audio import AudioService, AudioNormalizer
+from app.services.streaming_audio_writer import StreamingAudioWriter
+from app.inference.base import AudioChunk
 
 router = APIRouter()
-# ThreadPool limits parallel execution on the CPU.
 executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
-# Semaphore to provide backpressure and avoid queuing too many requests if system is overloaded
-concurrency_limiter = asyncio.Semaphore(settings.MAX_WORKERS * 10)
-
-async def stream_generator(text_input: str, style, speed: float, fmt: str, sample_rate: int):
-    loop = asyncio.get_event_loop()
-    chunks = split_text_into_chunks(text_input)
-    
-    for chunk in chunks:
-        try:
-            async with concurrency_limiter:
-                wav, _ = await loop.run_in_executor(
-                    executor,
-                    tts_service.synthesize,
-                    chunk, style, speed
-                )
-            
-            if wav.ndim == 2 and wav.shape[0] == 1:
-                wav = wav.squeeze()
-                
-            buffer = io.BytesIO()
-            sf_format = "WAV"
-            if fmt == "mp3": sf_format = "MP3"
-            elif fmt == "flac": sf_format = "FLAC"
-            elif fmt == "opus": sf_format = "OGG"
-            
-            if fmt == "pcm":
-                yield wav.tobytes()
-            else:
-                try:
-                    sf.write(buffer, wav, sample_rate, format=sf_format)
-                except Exception as e:
-                    logger.warning(f"Failed to write chunk format {sf_format}, fallback to WAV: {e}")
-                    sf.write(buffer, wav, sample_rate, format="WAV")
-                
-                yield buffer.getvalue()
-        except Exception as e:
-            logger.error(f"Stream synthesis error on chunk: {e}")
-            break
-
+concurrency_limiter = asyncio.Semaphore(settings.MAX_WORKERS * 50)
 @router.post("/v1/audio/speech", responses={
     200: {
         "content": {"audio/mpeg": {}, "audio/wav": {}, "audio/flac": {}, "audio/ogg": {}, "audio/pcm": {}},
         "description": "The generated audio file.",
     }
 })
-async def generate_speech(data: OpenAIInput, api_key: ApiKey = Depends(verify_api_key)):
+async def generate_speech(
+    data: OpenAIInput, 
+    background_tasks: BackgroundTasks,
+    api_key: ApiKey = Depends(verify_api_key)
+):
     # 1. Calculate Cost
     char_count = len(data.input)
     cost = (char_count / 1_000_000) * api_key.price_per_million_chars
     
-    # 2. Track Usage (Async fire and forget or await)
-    try:
-        await track_usage(api_key, char_count, cost)
-        logger.info(f"Billing {api_key.name}: {char_count} chars, ${cost:.6f}")
-    except Exception:
-        logger.exception(f"Failed to track usage for {api_key.name}")
-        raise HTTPException(status_code=500, detail="Billing logic failed")
+    # 2. Add Usage Tracking to Background Tasks
+    background_tasks.add_task(track_usage, api_key, char_count, cost)
+    logger.info(f"Queued billing for {api_key.name}: {char_count} chars, ${cost:.6f}")
 
-    if not tts_service.model:
-        raise HTTPException(status_code=503, detail="Model loading")
+    async with concurrency_limiter:
+        if not tts_service.model:
+            raise HTTPException(status_code=503, detail="Model loading")
 
-    # Normalize text
-    normalized_text = clean_text(data.input)
-    logger.debug(f"Normalized text: {normalized_text[:100]}...")
+        # Normalize text
+        normalized_text = clean_text(data.input) if data.normalize else data.input
+        logger.debug(f"Normalized text: {normalized_text[:100]}...")
 
-    try:
-        style = tts_service.get_style(data.voice)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        sample_rate = getattr(tts_service.model, 'sample_rate', settings.SAMPLE_RATE)
         
-    sample_rate = getattr(tts_service.model, 'sample_rate', 44100)
-    
-    media_types = {
-        "mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac",
-        "opus": "audio/ogg", "pcm": "audio/pcm"
-    }
-    media_type = media_types.get(data.response_format, "audio/wav")
-    filename = f"speech.{data.response_format}"
-
-    if data.stream:
-        headers = {
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "X-Accel-Buffering": "no"
+        media_types = {
+            "mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac",
+            "opus": "audio/ogg", "pcm": "audio/pcm"
         }
-        
-        async def gen():
-            async for chunk in stream_generator(normalized_text, style, data.speed, data.response_format, sample_rate):
-                yield chunk
+        media_type = media_types.get(data.response_format, "audio/wav")
+        filename = f"speech.{data.response_format}"
 
-        return StreamingResponse(
-            gen(),
-            media_type=media_type,
-            headers=headers
-        )
+        start_time = time.time()
 
-    # Non-stream
-    try:
-        loop = asyncio.get_event_loop()
-        async with concurrency_limiter:
-            wav, _ = await loop.run_in_executor(
-                executor,
-                tts_service.synthesize,
-                normalized_text, style, data.speed
-            )
-        
-        if wav.ndim == 2 and wav.shape[0] == 1:
-            wav = wav.squeeze()
+        if data.stream:
+            headers = {
+                "Content-Disposition": f'inline; filename="{filename}"',
+                "X-Accel-Buffering": "no"
+            }
             
-        buffer = io.BytesIO()
-        sf_format = "WAV"
-        if data.response_format == "mp3": sf_format = "MP3"
-        elif data.response_format == "flac": sf_format = "FLAC"
-        elif data.response_format == "opus": sf_format = "OGG"
-        
-        if data.response_format == "pcm":
-            buffer.write(wav.tobytes())
-        else:
-            try:
-                sf.write(buffer, wav, sample_rate, format=sf_format)
-            except Exception as e:
-                logger.warning(f"Failed to write format {sf_format}, fallback to WAV. Error: {e}")
-                sf.write(buffer, wav, sample_rate, format="WAV")
-                media_type = "audio/wav"
+            async def gen():
+                writer = StreamingAudioWriter(format=data.response_format, sample_rate=sample_rate)
+                first_byte_time = None
+                try:
+                    async for chunk in tts_service.generate_audio_stream(
+                        normalized_text, data.voice, writer, speed=data.speed, 
+                        output_format=data.response_format
+                    ):
+                        if chunk.output:
+                            if first_byte_time is None:
+                                first_byte_time = time.time()
+                                ttfb = (first_byte_time - start_time) * 1000
+                                logger.info(f"TTS Streaming TTFB: {ttfb:.2f}ms")
+                            yield chunk.output
+                finally:
+                    writer.close()
+                    total_time = (time.time() - start_time) * 1000
+                    logger.info(f"TTS Streaming Total Time: {total_time:.2f}ms for {char_count} chars")
 
-        buffer.seek(0)
-        return StreamingResponse(
-            buffer, 
-            media_type=media_type,
-            headers={"Content-Disposition": f'inline; filename="{filename}"'}
-        )
-        
-    except Exception as e:
-        logger.error(f"Synthesis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            return StreamingResponse(gen(), media_type=media_type, headers=headers)
+
+        # Non-stream
+        try:
+            writer = StreamingAudioWriter(format=data.response_format, sample_rate=sample_rate)
+            processed = await tts_service.generate_audio(
+                normalized_text, data.voice, writer, speed=data.speed, 
+                output_format=data.response_format
+            )
+            
+            total_time = (time.time() - start_time) * 1000
+            logger.info(f"TTS Non-Stream Total Time: {total_time:.2f}ms for {char_count} chars")
+            
+            if not processed.output:
+                raise ValueError("No audio output generated")
+
+            return StreamingResponse(
+                io.BytesIO(processed.output), 
+                media_type=media_type,
+                headers={"Content-Disposition": f'inline; filename="{filename}"'}
+            )
+            
+        except Exception as e:
+            logger.error(f"Synthesis error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/v1/models", response_model=ModelList)
 async def list_models():

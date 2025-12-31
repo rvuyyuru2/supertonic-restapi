@@ -7,6 +7,8 @@ import re
 
 import inflect
 from unidecode import unidecode
+from typing import AsyncGenerator, Tuple, List, Optional
+from app.api.schemas import NormalizationOptions
 
 
 _inflect = inflect.engine()
@@ -350,3 +352,28 @@ def split_text_into_chunks(text: str) -> list[str]:
         text_chunks.append(current_chunk)
         
     return [c.strip() for c in text_chunks if c.strip()]
+
+async def smart_split(
+    text: str,
+    lang_code: str = "en",
+    normalization_options: Optional[NormalizationOptions] = None
+) -> AsyncGenerator[Tuple[str, List[int], Optional[float]], None]:
+    """
+    Simplified version of smart_split that uses basic sentence splitting
+    and pause tag detection.
+    Yields: (chunk_text, tokens, pause_duration_s)
+    """
+    # Simple regex for pause tags like [pause:1.5]
+    parts = re.split(r'(\[pause:\d+\.?\d*\])', text)
+    
+    for part in parts:
+        pause_match = re.match(r'\[pause:(\d+\.?\d*)\]', part)
+        if pause_match:
+            yield "", [], float(pause_match.group(1))
+        elif part.strip():
+            # Basic sentence/clause splitting
+            sub_chunks = re.split(r'(?<=[.!?])\s+', part)
+            for chunk in sub_chunks:
+                if chunk.strip():
+                    # Return empty tokens for now as we use text-based synthesis
+                    yield chunk.strip(), [], None
