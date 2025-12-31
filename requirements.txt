@@ -1,0 +1,14 @@
+fastapi>=0.110.0
+uvicorn>=0.27.0
+supertonic
+numpy
+soundfile
+gunicorn
+python-dotenv
+unidecode
+inflect
+scipy
+tortoise-orm>=0.20.0
+pydantic-settings
+anyio
+httpx

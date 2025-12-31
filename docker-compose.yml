@@ -1,0 +1,28 @@
+services:
+  api:
+    build: .
+    # container_name: supertonic_tts  # Remove this to allow scaling
+    environment:
+      - FORCE_PROVIDERS=cpu
+      - PORT=8800
+      - HOST=0.0.0.0
+      - LOG_LEVEL=INFO
+      - MAX_WORKERS=4  # Lowering per replica to allow stacking
+    volumes:
+      - ./db.sqlite3:/app/db.sqlite3
+      - model_cache:/root/.cache
+    restart: unless-stopped
+
+  lb:
+    image: nginx:latest
+    container_name: supertonic_lb
+    ports:
+      - "8800:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  model_cache:
