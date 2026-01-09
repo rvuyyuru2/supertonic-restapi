@@ -1,9 +1,7 @@
-fastapi>=0.110.0
-uvicorn>=0.27.0
+robyn
 supertonic
 numpy
 soundfile
-gunicorn
 python-dotenv
 unidecode
 inflect

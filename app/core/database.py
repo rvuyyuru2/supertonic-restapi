@@ -1,13 +1,10 @@
 import logging
 import time
-from fastapi import Request, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.api.auth.models import ApiKey, UsageLog
 from app.core.config import settings
 from tortoise.transactions import in_transaction
 
 logger = logging.getLogger("supertonic-api")
-security = HTTPBearer(auto_error=False)
 
 def get_db_config():
     return {
@@ -20,18 +17,31 @@ def get_db_config():
         },
     }
 
-async def verify_api_key(creds: HTTPAuthorizationCredentials = Depends(security)):
+class AuthError(Exception):
+    def __init__(self, status_code, detail):
+        self.status_code = status_code
+        self.detail = detail
+
+async def verify_api_key(request):
     """
     Verifies the Bearer token provided in the Authorization header.
     """
-    if not creds:
-         raise HTTPException(status_code=401, detail="Missing API Key. Provide 'Authorization: Bearer <key>'")
+    headers = request.headers
+    # Robyn headers are often a specialized dict-like object
+    auth_header = headers.get("Authorization") or headers.get("authorization")
     
-    token = creds.credentials
+    if not auth_header:
+         raise AuthError(status_code=401, detail="Missing API Key. Provide 'Authorization: Bearer <key>'")
+    
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise AuthError(status_code=401, detail="Invalid Authorization header format. Expected 'Bearer <key>'")
+
+    token = parts[1]
     
     api_key = await ApiKey.get_or_none(key=token, is_active=True)
     if not api_key:
-        raise HTTPException(status_code=401, detail="Invalid or inactive API Key")
+        raise AuthError(status_code=401, detail="Invalid or inactive API Key")
         
     return api_key
 

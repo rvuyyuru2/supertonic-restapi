@@ -105,29 +105,36 @@ class AudioService:
             if output_format not in AudioService.SUPPORTED_FORMATS:
                 raise ValueError(f"Format {output_format} not supported")
 
-            if normalizer is None:
-                normalizer = AudioNormalizer()
-                normalizer.sample_rate = audio_chunk.sample_rate
+            import asyncio
+            loop = asyncio.get_event_loop()
 
-            audio_chunk.audio = normalizer.normalize(audio_chunk.audio)
+            def _process():
+                nonlocal audio_chunk
+                inner_normalizer = normalizer
+                if inner_normalizer is None:
+                    inner_normalizer = AudioNormalizer()
+                    inner_normalizer.sample_rate = audio_chunk.sample_rate
 
-            if trim_audio:
-                audio_chunk = AudioService.trim_audio(
-                    audio_chunk, chunk_text, speed, is_last_chunk, normalizer
-                )
+                audio_chunk.audio = inner_normalizer.normalize(audio_chunk.audio)
 
-            chunk_data = b""
-            if len(audio_chunk.audio) > 0:
-                chunk_data = writer.write_chunk(audio_chunk.audio)
+                if trim_audio:
+                    audio_chunk = AudioService.trim_audio(
+                        audio_chunk, chunk_text, speed, is_last_chunk, inner_normalizer
+                    )
 
-            if is_last_chunk:
-                final_data = writer.write_chunk(finalize=True)
-                audio_chunk.output = chunk_data + (final_data if final_data else b"")
+                chunk_data = b""
+                if len(audio_chunk.audio) > 0:
+                    chunk_data = writer.write_chunk(audio_chunk.audio)
+
+                if is_last_chunk:
+                    final_data = writer.write_chunk(finalize=True)
+                    audio_chunk.output = chunk_data + (final_data if final_data else b"")
+                elif chunk_data:
+                    audio_chunk.output = chunk_data
+                
                 return audio_chunk
 
-            if chunk_data:
-                audio_chunk.output = chunk_data
-            return audio_chunk
+            return await loop.run_in_executor(None, _process)
 
         except Exception as e:
             logger.error(f"Error converting audio stream to {output_format}: {str(e)}")

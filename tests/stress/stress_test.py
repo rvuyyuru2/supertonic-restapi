@@ -2,14 +2,14 @@ import asyncio
 import httpx
 import time
 import statistics
-import random
+# import random
 from dataclasses import dataclass
 from typing import List, Optional
 
 API_URL = "http://localhost:8800/v1/audio/speech"
 API_KEY = "rLKAAK9R8d2qiqZo7ijUvfEon-BwvupDzeBzJjMko_Q"
-CONCURRENT_REQUESTS = 10
-TOTAL_REQUESTS = 50
+CONCURRENT_REQUESTS = 25
+TOTAL_REQUESTS = 500
 
 @dataclass
 class RequestResult:

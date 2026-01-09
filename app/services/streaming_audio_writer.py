@@ -5,6 +5,23 @@ import av
 import numpy as np
 from loguru import logger
 
+class PipeIO:
+    """
+    A wrapper around a file-like object that exposes only write/tell/flush
+    to trick PyAV into treating it as a non-seekable stream (like a pipe).
+    """
+    def __init__(self, buffer):
+        self.buffer = buffer
+
+    def write(self, data):
+        return self.buffer.write(data)
+
+    def tell(self):
+        return self.buffer.tell()
+        
+    def flush(self):
+        return self.buffer.flush()
+
 class StreamingAudioWriter:
     """Handles streaming audio format conversions using PyAV for efficient encoding."""
 
@@ -28,14 +45,16 @@ class StreamingAudioWriter:
             if self.format != "pcm":
                 self.output_buffer = BytesIO()
                 container_options = {}
-                # Try disabling Xing VBR header for MP3 to fix iOS timeline reading issues
+                
+                # Check for mp3 
                 if self.format == 'mp3':
-                    # Disable Xing VBR header
+                    # Disable Xing VBR header prevents seeking back
                     container_options = {'write_xing': '0'}
                     logger.debug("Disabling Xing VBR header for MP3 encoding.")
 
+                # Use PipeIO wrapper to enforce streaming mode
                 self.container = av.open(
-                    self.output_buffer,
+                    PipeIO(self.output_buffer),
                     mode="w",
                     format=self.format if self.format != "aac" else "adts",
                     options=container_options
@@ -45,19 +64,16 @@ class StreamingAudioWriter:
                     rate=self.sample_rate,
                     layout="mono" if self.channels == 1 else "stereo",
                 )
-                # Set bit_rate only for codecs where it's applicable and useful
+                
                 if self.format in ['mp3', 'aac', 'opus']:
                     self.stream.bit_rate = 128000
         else:
             raise ValueError(f"Unsupported format: {self.format}")
 
     def close(self):
-        if hasattr(self, "container"):
-            try:
-                self.container.close()
-            except Exception as e:
-                logger.error(f"Error closing container: {e}")
-
+        # The container is now closed explicitly in write_chunk for finalize
+        # to handle potential seek errors with PipeIO.
+        # We only need to ensure the output_buffer is closed if it exists.
         if hasattr(self, "output_buffer"):
             self.output_buffer.close()
 
@@ -74,15 +90,25 @@ class StreamingAudioWriter:
         if finalize:
             if self.format != "pcm":
                 # Flush stream encoder
-                packets = self.stream.encode(None)
-                for packet in packets:
-                    self.container.mux(packet)
+                try:
+                    packets = self.stream.encode(None)
+                    for packet in packets:
+                        self.container.mux(packet)
+                except Exception as e:
+                    logger.warning(f"Error flushing encoder: {e}")
 
                 logger.debug("Muxed final packets.")
+                
+                # Close container to flush footer
+                try:
+                    self.container.close()
+                except Exception as e:
+                    # Ignore seek errors on close since we are streaming
+                    logger.debug(f"Container close (expected if pipe): {e}")
 
-                # Get the final bytes from the buffer before closing it
+                # Get the final bytes
                 data = self.output_buffer.getvalue()
-                self.close()
+                self.output_buffer.close()
                 return data
             return b""
 

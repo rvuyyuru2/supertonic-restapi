@@ -1,49 +1,58 @@
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from fastapi.responses import StreamingResponse, JSONResponse
+from robyn import SubRouter, Request, Response, jsonify
+from robyn.responses import StreamingResponse
 import onnxruntime as ort
-from concurrent.futures import ThreadPoolExecutor
-import io
 import asyncio
-import soundfile as sf
 import time
+import json
 from app.core.config import settings
-from app.api.schemas import OpenAIInput, ModelList
+from app.api.schemas import OpenAIInput
 from app.services.tts import tts_service
-from app.utils.text import split_text_into_chunks, clean_text
+from app.utils.text import clean_text
 from app.core.logging import logger
-from app.core.database import verify_api_key, track_usage
-from app.api.auth.models import ApiKey
-from app.services.audio import AudioService, AudioNormalizer
+from app.core.database import verify_api_key, track_usage, AuthError
 from app.services.streaming_audio_writer import StreamingAudioWriter
-from app.inference.base import AudioChunk
 
-router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
+router = SubRouter(__name__, prefix="")
+
+def error_response(status_code: int, detail: str):
+    return Response(
+        status_code=status_code,
+        headers={"Content-Type": "application/json"},
+        description=json.dumps({"detail": detail})
+    )
+
 concurrency_limiter = asyncio.Semaphore(settings.MAX_WORKERS * 50)
-@router.post("/v1/audio/speech", responses={
-    200: {
-        "content": {"audio/mpeg": {}, "audio/wav": {}, "audio/flac": {}, "audio/ogg": {}, "audio/pcm": {}},
-        "description": "The generated audio file.",
-    }
-})
-async def generate_speech(
-    data: OpenAIInput, 
-    background_tasks: BackgroundTasks,
-    api_key: ApiKey = Depends(verify_api_key)
-):
-    # 1. Calculate Cost
-    char_count = len(data.input)
-    cost = (char_count / 1_000_000) * api_key.price_per_million_chars
+
+@router.post("/v1/audio/speech")
+async def generate_speech(request: Request):
+    try:
+        api_key = await verify_api_key(request)
     
-    # 2. Add Usage Tracking to Background Tasks
-    background_tasks.add_task(track_usage, api_key, char_count, cost)
-    logger.info(f"Queued billing for {api_key.name}: {char_count} chars, ${cost:.6f}")
+        try:
+            body_content = request.body
+            if not body_content:
+                return error_response(400, "Empty request body")
+            
+            if isinstance(body_content, bytes):
+                body_content = body_content.decode("utf-8")
+                
+            body = json.loads(body_content)
+            data = OpenAIInput(**body)
+        except Exception as e:
+            return error_response(400, f"Invalid JSON body: {str(e)}")
 
-    async with concurrency_limiter:
+        # 1. Calculate Cost
+        char_count = len(data.input)
+        cost = (char_count / 1_000_000) * api_key.price_per_million_chars
+        
+        # 2. Add Usage Tracking to Background Tasks (Fire and forget)
+        asyncio.create_task(track_usage(api_key, char_count, cost))
+        logger.info(f"Queued billing for {api_key.name}: {char_count} chars, ${cost:.6f}")
+
         if not tts_service.model:
-            raise HTTPException(status_code=503, detail="Model loading")
+            return error_response(503, "Model loading")
 
-        # Normalize text
+        # Normalize text using the simplified clean_text
         normalized_text = clean_text(data.input) if data.normalize else data.input
         logger.debug(f"Normalized text: {normalized_text[:100]}...")
 
@@ -58,69 +67,59 @@ async def generate_speech(
 
         start_time = time.time()
 
-        if data.stream:
-            headers = {
-                "Content-Disposition": f'inline; filename="{filename}"',
-                "X-Accel-Buffering": "no"
-            }
-            
-            async def gen():
-                writer = StreamingAudioWriter(format=data.response_format, sample_rate=sample_rate)
-                first_byte_time = None
-                try:
-                    async for chunk in tts_service.generate_audio_stream(
-                        normalized_text, data.voice, writer, speed=data.speed, 
-                        output_format=data.response_format
-                    ):
-                        if chunk.output:
-                            if first_byte_time is None:
-                                first_byte_time = time.time()
-                                ttfb = (first_byte_time - start_time) * 1000
-                                logger.info(f"TTS Streaming TTFB: {ttfb:.2f}ms")
-                            yield chunk.output
-                finally:
-                    writer.close()
-                    total_time = (time.time() - start_time) * 1000
-                    logger.info(f"TTS Streaming Total Time: {total_time:.2f}ms for {char_count} chars")
-
-            return StreamingResponse(gen(), media_type=media_type, headers=headers)
-
-        # Non-stream
+        # Synthesis is always asynchronous through loop.run_in_executor in tts_service
         try:
             writer = StreamingAudioWriter(format=data.response_format, sample_rate=sample_rate)
+            
+            # Use generate_audio which gathers all chunks but processes them asynchronously
             processed = await tts_service.generate_audio(
                 normalized_text, data.voice, writer, speed=data.speed, 
                 output_format=data.response_format
             )
             
             total_time = (time.time() - start_time) * 1000
-            logger.info(f"TTS Non-Stream Total Time: {total_time:.2f}ms for {char_count} chars")
+            if data.stream:
+                logger.info(f"TTS Stream (Gathered) Total Time: {total_time:.2f}ms for {char_count} chars")
+            else:
+                logger.info(f"TTS Non-Stream Total Time: {total_time:.2f}ms for {char_count} chars")
             
             if not processed.output:
                 raise ValueError("No audio output generated")
 
-            return StreamingResponse(
-                io.BytesIO(processed.output), 
-                media_type=media_type,
-                headers={"Content-Disposition": f'inline; filename="{filename}"'}
+            # Robyn 0.x only reliably handles binary data as full bytes in Response objects.
+            return Response(
+                status_code=200, 
+                headers={
+                    "Content-Disposition": f'inline; filename="{filename}"', 
+                    "Content-Type": media_type
+                },
+                description=bytes(processed.output)
             )
             
         except Exception as e:
             logger.error(f"Synthesis error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            return error_response(500, str(e))
 
-@router.get("/v1/models", response_model=ModelList)
-async def list_models():
-    return {
+    except AuthError as e:
+        return error_response(e.status_code, e.detail)
+    except Exception as e:
+        import traceback
+        logger.error(f"Unhandled error: {e}")
+        logger.error(traceback.format_exc())
+        return error_response(500, "Internal Server Error")
+
+@router.get("/v1/models")
+async def list_models(request: Request):
+    return jsonify({
         "data": [
             {"id": "tts-1", "created": 1677610602, "owned_by": "openai"},
             {"id": "supertonic", "created": 1677610602, "owned_by": "supertone", 
              "providers": ort.get_available_providers()}
         ]
-    }
+    })
 
 @router.get("/voices")
-async def list_voices():
+async def list_voices(request: Request):
     if not tts_service.model:
-        return JSONResponse(status_code=503, content={"error": "Model not ready"})
-    return {"voices": getattr(tts_service.model, 'voice_style_names', [])}
+        return error_response(503, "Model not ready")
+    return jsonify({"voices": getattr(tts_service.model, 'voice_style_names', [])})

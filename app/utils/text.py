@@ -1,357 +1,81 @@
-"""
-Normalize input text to a format that Soprano recognizes.
-Adapted from https://github.com/neonbjb/tortoise-tts/blob/main/tortoise/utils/tokenizer.py
-"""
-import os
 import re
-
-import inflect
-from unidecode import unidecode
+from unicodedata import normalize
 from typing import AsyncGenerator, Tuple, List, Optional
 from app.api.schemas import NormalizationOptions
 
-
-_inflect = inflect.engine()
-
-####################################################################################################
-# Abbreviations
-
-_abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in [
-    ('mrs', 'misuss'),
-    ('ms', 'miss'),
-    ('mr', 'mister'),
-    ('dr', 'doctor'),
-    ('st', 'saint'),
-    ('co', 'company'),
-    ('jr', 'junior'),
-    ('maj', 'major'),
-    ('gen', 'general'),
-    ('drs', 'doctors'),
-    ('rev', 'reverend'),
-    ('lt', 'lieutenant'),
-    ('hon', 'honorable'),
-    ('sgt', 'sergeant'),
-    ('capt', 'captain'),
-    ('esq', 'esquire'),
-    ('ltd', 'limited'),
-    ('col', 'colonel'),
-    ('ft', 'fort'),
-]]
-_cased_abbreviations = [(re.compile('\\b%s\\b' % x[0]), x[1]) for x in [
-    ('TTS', 'text to speech'),
-    ('Hz', 'hertz'),
-    ('kHz', 'kilohertz'),
-    ('KBs', 'kilobytes'),
-    ('KB', 'kilobyte'),
-    ('MBs', 'megabytes'),
-    ('MB', 'megabyte'),
-    ('GBs', 'gigabytes'),
-    ('GB', 'gigabyte'),
-    ('TBs', 'terabytes'),
-    ('TB', 'terabyte'),
-    ('APIs', 'a p i\'s'),
-    ('API', 'a p i'),
-    ('CLIs', 'c l i\'s'),
-    ('CLI', 'c l i'),
-    ('CPUs', 'c p u\'s'),
-    ('CPU', 'c p u'),
-    ('GPUs', 'g p u\'s'),
-    ('GPU', 'g p u'),
-    ('Ave', 'avenue'),
-    ('etc', 'etcetera'),
-]]
-
-def expand_abbreviations(text):
-    for regex, replacement in _abbreviations + _cased_abbreviations:
-        text = re.sub(regex, replacement, text)
-    return text
-
-####################################################################################################
-# Numbers
-
-_num_prefix_re = re.compile(r'#\d')
-_num_suffix_re = re.compile(r'\d(K|M|B|T)', re.IGNORECASE)
-_num_letter_split_re = re.compile(r'(\d[a-z]|[a-z]\d)', re.IGNORECASE)
-
-_comma_number_re = re.compile(r'(\d[\d\,]+\d)')
-_date_re = re.compile(r'(^|[^/])(\d\d?[/-]\d\d?[/-]\d\d(?:\d\d)?)($|[^/])')
-_phone_number_re = re.compile(r'(\(?\d{3}\)?[-.\s]\d{3}[-.\s]?\d{4})')
-_time_re = re.compile(r'(\d\d?:\d\d(?::\d\d)?)')
-_pounds_re = re.compile(r'£([\d\,]*\d+)')
-_dollars_re = re.compile(r'\$([\d\.\,]*\d+)')
-_decimal_number_re = re.compile(r'(\d+(?:\.\d+)+)')
-_multiply_re = re.compile(r'(\d\s?\*\s?\d)')
-_divide_re = re.compile(r'(\d\s?/\s?\d)')
-_add_re = re.compile(r'(\d\s?\+\s?\d)')
-_subtract_re = re.compile(r'(\d?\s?-\s?\d)') # also does negative numbers
-_fraction_re = re.compile(r'(\d+(?:/\d+)+)')
-_ordinal_re = re.compile(r'\d+(st|nd|rd|th)')
-_number_re = re.compile(r'\d+')
-
-def _expand_num_prefix(m):
-    match = m.group(0)
-    return f"number {match[1]}"
-
-def _expand_num_suffix(m):
-    match = m.group(0)
-    if match[1].upper() == 'K': return f"{match[0]} thousand"
-    elif match[1].upper() == 'M': return f"{match[0]} million"
-    elif match[1].upper() == 'B': return f"{match[0]} billion"
-    elif match[1].upper() == 'T': return f"{match[0]} trillion"
-    return match # unexpected format
-
-def _split_alphanumeric(m):
-    match = m.group(1)
-    return f"{match[0]} {match[1]}"
-
-def _remove_commas(m):
-    return m.group(1).replace(',', '')
-
-def _expand_date(m):
-    match = m.group(2)
-    match = re.split('[./-]', match)
-    return m.group(1) + ' dash '.join(match) + m.group(3)
-    
-def _expand_phone_number(m):
-    match = m.group(1)
-    match = re.sub(r'\D', '', match)
-    assert len(match) == 10
-    match = f"{' '.join(list(match[:3]))}, {' '.join(list(match[3:6]))}, {' '.join(list(match[6:]))}"
-    return match
-    
-def _expand_time(m):
-    match = m.group(1)
-    match = match.split(':')
-    if len(match) == 2:
-        hours, minutes = match
-        if minutes == '00':
-            if int(hours) == 0:
-                return '0'
-            elif int(hours) > 12: return f"{hours} minutes"
-            return f"{hours} o'clock"
-        elif minutes.startswith('0'):
-            minutes = f'oh {minutes[1:]}'
-        return f"{hours} {minutes}"
-    else:
-        hours, minutes, seconds = match
-        if int(hours) != 0:
-            return f"{hours} {'oh oh' if minutes == '00' else f'oh {minutes}' if minutes.startswith('0') else {minutes}} {'' if seconds == '00' else f'oh {seconds}' if seconds.startswith('0') else seconds}"
-        elif minutes != '00':
-            return f"{minutes} {'oh oh' if seconds == '00' else f'oh {seconds}' if seconds.startswith('0') else seconds}"
-        else:
-            return seconds
-
-def _expand_dollars(m):
-    match = m.group(1)
-    parts = match.split('.')
-    if len(parts) > 2:
-        return match + ' dollars'  # Unexpected format
-    dollars = int(parts[0]) if parts[0] else 0
-    cents = int(parts[1]) if len(parts) > 1 and parts[1] else 0
-    if dollars and cents:
-        dollar_unit = 'dollar' if dollars == 1 else 'dollars'
-        cent_unit = 'cent' if cents == 1 else 'cents'
-        return '%s %s, %s %s' % (dollars, dollar_unit, cents, cent_unit)
-    elif dollars:
-        dollar_unit = 'dollar' if dollars == 1 else 'dollars'
-        return '%s %s' % (dollars, dollar_unit)
-    elif cents:
-        cent_unit = 'cent' if cents == 1 else 'cents'
-        return '%s %s' % (cents, cent_unit)
-    else:
-        return 'zero dollars'
-
-def _expand_decimal_point(m):
-    match = m.group(1)
-    match = match.split('.')
-    return match[0] + ' point ' + ' point '.join(' '.join(list(match[i])) for i in range(1, len(match)))
-
-def _expand_fraction(m):
-    match = m.group(1)
-    match = match.split('/')
-    return ' over '.join(match) if len(match)==2 else ' slash '.join(match)
-    
-def _expand_multiply(m):
-    return ' times '.join(m.group(1).split('*'))
-    
-def _expand_divide(m):
-    return ' over '.join(m.group(1).split('/'))
-    
-def _expand_add(m):
-    return ' plus '.join(m.group(1).split('+'))
-    
-def _expand_subtract(m):
-    return ' minus '.join(m.group(1).split('-'))
-    
-def _expand_ordinal(m):
-    return _inflect.number_to_words(m.group(0), andword='')
-
-def _expand_number(m):
-    num = int(m.group(0))
-    if num > 1000 and num < 3000:
-        if num == 2000:
-            return 'two thousand'
-        elif num > 2000 and num < 2010:
-            return 'two thousand ' + _inflect.number_to_words(num % 100)
-        elif num % 100 == 0:
-            return _inflect.number_to_words(num // 100) + ' hundred'
-        else:
-            return _inflect.number_to_words(num, andword='', zero='oh', group=2).replace(', ', ' ')
-    else:
-        return _inflect.number_to_words(num, andword='')
-
-def normalize_numbers(text):
-    text = re.sub(_num_prefix_re, _expand_num_prefix, text)
-    text = re.sub(_num_suffix_re, _expand_num_suffix, text)
-    for _ in range(2): # need to do this twice to find all matches
-        text = re.sub(_num_letter_split_re, _split_alphanumeric, text)
-    text = re.sub(_comma_number_re, _remove_commas, text)
-    text = re.sub(_date_re, _expand_date, text)
-    text = re.sub(_phone_number_re, _expand_phone_number, text)
-    text = re.sub(_time_re, _expand_time, text)
-    text = re.sub(_pounds_re, r'\1 pounds', text)
-    text = re.sub(_dollars_re, _expand_dollars, text)
-    text = re.sub(_decimal_number_re, _expand_decimal_point, text)
-    text = re.sub(_multiply_re, _expand_multiply, text)
-    text = re.sub(_divide_re, _expand_divide, text)
-    text = re.sub(_add_re, _expand_add, text)
-    text = re.sub(_subtract_re, _expand_subtract, text)
-
-    text = re.sub(_fraction_re, _expand_fraction, text)
-    text = re.sub(_ordinal_re, _expand_ordinal, text)
-    text = re.sub(_number_re, _expand_number, text)
-    return text
-
-####################################################################################################
-# Special characters & other patterns
-
-_special_characters = [(re.compile(x[0]), x[1]) for x in [
-    ('@', ' at '),
-    ('&', ' and '),
-    ('%', ' percent '),
-    (':', '.'),
-    (';', ','),
-    (r'\+', ' plus '),
-    (r'\\', ' backslash '),
-    ('~', ' about '),
-    ('(^| )<3', ' heart '),
-    ('<=', ' less than or equal to '),
-    ('>=', ' greater than or equal to '),
-    ('<', ' less than '),
-    ('>', ' greater than '),
-    ('=', ' equals '),
-    ('/', ' slash '),
-    ('_', ' '),
-]]
-_link_header_re = re.compile(r'(https?://)')
-_dash_re = re.compile(r'(. - .)')
-_dot_re = re.compile(r'([A-Z]\.[A-Z])', re.IGNORECASE)
-_parentheses_re = re.compile(r'[\(\[\{].*[\)\]\}](.|$)')
-
-def expand_special_characters(text):
-    for regex, replacement in _special_characters:
-        text = re.sub(regex, replacement, text)
-    return text
-
-def _expand_link_header(m):
-    return 'h t t p s colon slash slash '
-
-def _expand_dash(m):
-    match = m.group(0)
-    return f"{match[0]}, {match[4]}"
-
-def _expand_dot(m):
-    match = m.group(0)
-    return f"{match[0]} dot {match[2]}"
-
-def _expand_parantheses(m):
-    match = m.group(0)
-    match = re.sub(r'[\(\[\{]', ', ', match)
-    match = re.sub(r'[\)\]\}][^$.!?,]', ', ', match)
-    match = re.sub(r'[\)\]\}]', '', match)
-    return match
-
-def normalize_special(text):
-    text = re.sub(_link_header_re, _expand_link_header, text)
-    text = re.sub(_dash_re, _expand_dash, text)
-    text = re.sub(_dot_re, _expand_dot, text)
-    text = re.sub(_parentheses_re, _expand_parantheses, text)
-    return text
-
-####################################################################################################
-# Misc
-
-def lowercase(text):
-    return text.lower()
-
-def convert_to_ascii(text):
-    return unidecode(text)
-
-def normalize_newlines(text):
-    text = text.split('\n')
-    for i in range(len(text)):
-        if not text[i]: continue
-        text[i] = text[i].strip()
-        if text[i][-1] not in '.!?':
-            text[i] = f"{text[i]}."
-    return ' '.join(text)
-
-def remove_unknown_characters(text):
-    text = re.sub(r"[^A-Za-z !\$%&'\*\+,-./0123456789<>\?_]", "", text)
-    text = re.sub(r"[<>/_+]", "", text)
-    return text
-
-def collapse_whitespace(text):
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r' [.\?!,]', lambda m: m.group(0)[1], text)
-    return text
-
-def dedup_punctuation(text):
-    text = re.sub(r"\.\.\.+", "[ELLIPSIS]", text)
-    text = re.sub(r",+", ",", text)
-    text = re.sub(r"[\.,]*\.[\.,]*", ".", text)
-    text = re.sub(r"[\.,!]*![\.,!]*", "!", text)
-    text = re.sub(r"[\.,!\?]*\?[\.,!\?]*", "?", text)
-    text = re.sub("[ELLIPSIS]", "...", text)
-    return text
-
-def clean_text(text):
-    text = convert_to_ascii(text)
-    text = normalize_newlines(text)
-    text = normalize_numbers(text)
-    text = normalize_special(text)
-    text = expand_abbreviations(text)
-    text = expand_special_characters(text)
-    text = lowercase(text)
-    text = remove_unknown_characters(text)
-    text = collapse_whitespace(text)
-    text = dedup_punctuation(text)
-    return text
-
-def split_text_into_chunks(text: str) -> list[str]:
+def clean_text(text: str) -> str:
     """
-    Split text into sentence-like chunks, preserving punctuation.
+    Minimal text preprocessing as suggested by the example code.
+    Replaces common symbols, removes emojis, and ensures basic punctuation.
     """
-    # Split by . ! ? \n, keeping the delimiter.
-    # The pattern ([.!?\n]+) captures the delimiter.
-    raw_chunks = re.split(r'([.!?\n]+)', text)
-    
-    # Reassemble: "Hello" + "." -> "Hello."
-    text_chunks = []
-    current_chunk = ""
-    
-    for part in raw_chunks:
-        current_chunk += part
-        if re.search(r'[.!?\n]', part):
-             if current_chunk.strip():
-                 text_chunks.append(current_chunk)
-                 current_chunk = ""
-    
-    # Append any remainder
-    if current_chunk.strip():
-        text_chunks.append(current_chunk)
-        
-    return [c.strip() for c in text_chunks if c.strip()]
+    # 1. Unicode normalization
+    text = normalize("NFKD", text)
+
+    # 2. Remove emojis (wide Unicode range)
+    emoji_pattern = re.compile(
+        "[\U0001f600-\U0001f64f"  # emoticons
+        "\U0001f300-\U0001f5ff"  # symbols & pictographs
+        "\U0001f680-\U0001f6ff"  # transport & map symbols
+        "\U0001f700-\U0001f77f"
+        "\U0001f780-\U0001f7ff"
+        "\U0001f800-\U0001f8ff"
+        "\U0001f900-\U0001f9ff"
+        "\U0001fa00-\U0001fa6f"
+        "\U0001fa70-\U0001faff"
+        "\u2600-\u26ff"
+        "\u2700-\u27bf"
+        "\U0001f1e6-\U0001f1ff]+",
+        flags=re.UNICODE,
+    )
+    text = emoji_pattern.sub("", text)
+
+    # 3. Replace various dashes and symbols with simpler versions
+    replacements = {
+        "–": "-", "‑": "-", "—": "-", "¯": " ", "_": " ",
+        "\u201C": '"', "\u201D": '"', "\u2018": "'", "\u2019": "'",
+        "´": "'", "`": "'", "[": " ", "]": " ", "|": " ", "/": " ",
+        "#": " ", "→": " ", "←": " ",
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+
+    # 4. Remove combining diacritics
+    text = re.sub(
+        r"[\u0302\u0303\u0304\u0305\u0306\u0307\u0308\u030A\u030B\u030C\u0327\u0328\u0329\u032A\u032B\u032C\u032D\u032E\u032F]",
+        "", text,
+    )
+
+    # 5. Remove special symbols
+    text = re.sub(r"[♥☆♡©\\]", "", text)
+
+    # 6. Replace known expressions
+    expr_replacements = {
+        "@": " at ",
+        "e.g.,": "for example, ",
+        "i.e.,": "that is, ",
+    }
+    for k, v in expr_replacements.items():
+        text = text.replace(k, v)
+
+    # 7. Fix spacing around punctuation
+    text = re.sub(r" ,", ",", text)
+    text = re.sub(r" \.", ".", text)
+    text = re.sub(r" !", "!", text)
+    text = re.sub(r" \?", "?", text)
+    text = re.sub(r" ;", ";", text)
+    text = re.sub(r" :", ":", text)
+    text = re.sub(r" '", "'", text)
+
+    # 8. Remove duplicate quotes and spaces
+    while '""' in text: text = text.replace('""', '"')
+    while "''" in text: text = text.replace("''", "'")
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # 9. Ensure ending punctuation
+    if text and not re.search(r"[.!?;:,'\"')\]}…。」』】〉》›»]$", text):
+        text += "."
+
+    return text
 
 async def smart_split(
     text: str,
@@ -359,21 +83,46 @@ async def smart_split(
     normalization_options: Optional[NormalizationOptions] = None
 ) -> AsyncGenerator[Tuple[str, List[int], Optional[float]], None]:
     """
-    Simplified version of smart_split that uses basic sentence splitting
-    and pause tag detection.
+    Split text into chunks by paragraphs and sentences using logic from Supertonic examples.
     Yields: (chunk_text, tokens, pause_duration_s)
     """
-    # Simple regex for pause tags like [pause:1.5]
+    # 1. Split by pause tags first to handle duration-based gaps
     parts = re.split(r'(\[pause:\d+\.?\d*\])', text)
+    
+    # Advanced sentence boundary regex that handles abbreviations
+    sentence_pattern = r"(?<!Mr\.)(?<!Mrs\.)(?<!Ms\.)(?<!Dr\.)(?<!Prof\.)(?<!Sr\.)(?<!Jr\.)(?<!Ph\.D\.)(?<!etc\.)(?<!e\.g\.)(?<!i\.e\.)(?<!vs\.)(?<!Inc\.)(?<!Ltd\.)(?<!Co\.)(?<!Corp\.)(?<!St\.)(?<!Ave\.)(?<!Blvd\.)(?<!\b[A-Z]\.)(?<=[.!?])\s+"
     
     for part in parts:
         pause_match = re.match(r'\[pause:(\d+\.?\d*)\]', part)
         if pause_match:
             yield "", [], float(pause_match.group(1))
-        elif part.strip():
-            # Basic sentence/clause splitting
-            sub_chunks = re.split(r'(?<=[.!?])\s+', part)
-            for chunk in sub_chunks:
-                if chunk.strip():
-                    # Return empty tokens for now as we use text-based synthesis
-                    yield chunk.strip(), [], None
+            continue
+            
+        if not part.strip():
+            continue
+
+        # 2. Split by paragraph (two or more newlines)
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", part.strip()) if p.strip()]
+        
+        for paragraph in paragraphs:
+            # 3. Split by sentence boundaries
+            sentences = re.split(sentence_pattern, paragraph)
+            
+            # Combine sentences into chunks of reasonable length (e.g., 300 chars)
+            current_chunk = ""
+            max_len = 300
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                    
+                if len(current_chunk) + len(sentence) + 1 <= max_len:
+                    current_chunk += (" " if current_chunk else "") + sentence
+                else:
+                    if current_chunk:
+                        yield current_chunk.strip(), [], None
+                    current_chunk = sentence
+            
+            if current_chunk:
+                yield current_chunk.strip(), [], None

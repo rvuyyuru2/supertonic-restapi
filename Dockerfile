@@ -20,12 +20,11 @@ COPY app/ ./app/
 ENV PORT=8800
 ENV HOST=0.0.0.0
 ENV MODEL_THREADS=1 
-ENV WEB_CONCURRENCY=2
 ENV MAX_WORKERS=4
 ENV TIMEOUT=120
 ENV PYTHONPATH=/app
 
 EXPOSE 8800
 
-# Start with Gunicorn + Uvicorn
-CMD exec gunicorn -k uvicorn.workers.UvicornWorker -w $WEB_CONCURRENCY --threads $MAX_WORKERS --timeout $TIMEOUT --bind $HOST:$PORT app.main:app
+# Start with Robyn
+CMD ["sh", "-c", "robyn app/main.py --processes ${WEB_CONCURRENCY:-1} --workers ${WORKERS:-1}"]

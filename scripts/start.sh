@@ -26,13 +26,14 @@ fi
 # Default values if not set in .env
 HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-8800}
+WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
+WORKERS=${WORKERS:-2}
 
-echo "Starting Supertonic TTS Production Server on $HOST:$PORT..."
+# Export PYTHONPATH to include current directory for imports
+export PYTHONPATH=$PYTHONPATH:.
 
-# Run from root so 'app' package is found
-exec gunicorn -k uvicorn.workers.UvicornWorker \
-    -w 1 \
-    --threads 4 \
-    --timeout 300 \
-    --bind $HOST:$PORT \
-    app.main:app
+echo "Starting Supertonic TTS Production Server on $HOST:$PORT with Robyn..."
+
+# Use Robyn's built-in multi-process manager
+# Gunicorn is not compatible because Robyn manages its own Rust-based runtime/server.
+exec robyn app/main.py --processes $WEB_CONCURRENCY --workers $WORKERS
