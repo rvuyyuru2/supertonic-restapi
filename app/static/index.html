@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supertonic FastAPI - High Performance OpenAI-Compatible TTS API</title>
+    <meta name="description"
+        content="Supertonic FastAPI is a production-ready, lightning-fast text-to-speech API. Fully compatible with OpenAI's TTS specifications, it features auto-chunking, multi-voice support, and hardware acceleration for CUDA and CoreML.">
+    <meta name="keywords"
+        content="TTS, Text-to-Speech, Supertonic, FastAPI, OpenAI API, AI Voice, Speech Synthesis, Python, Docker, Machine Learning, Audio Generation, Real-time TTS, High Performance API">
+    <meta name="author" content="Supertonic Team">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://your-domain.com/">
+    <meta property="og:title" content="Supertonic FastAPI - High Performance OpenAI-Compatible TTS API">
+    <meta property="og:description"
+        content="Streamline your speech synthesis with Supertonic FastAPI. High performance, auto-chunking, and seamless OpenAI compatibility.">
+    <meta property="og:image" content="https://your-domain.com/og-image.png">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://your-domain.com/">
+    <meta property="twitter:title" content="Supertonic FastAPI - High Performance OpenAI-Compatible TTS API">
+    <meta property="twitter:description"
+        content="Streamline your speech synthesis with Supertonic FastAPI. High performance, auto-chunking, and seamless OpenAI compatibility.">
+    <meta property="twitter:image" content="https://your-domain.com/og-image.png">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #0076FF;
+            --background: #000000;
+            --surface: #111111;
+            --text: #ffffff;
+            --text-secondary: #888888;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--background);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 800px;
+            padding: 2rem;
+            z-index: 1;
+        }
+
+        h1 {
+            font-size: 4rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #fff 0%, #0076FF 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.05em;
+        }
+
+        p {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            margin-bottom: 2.5rem;
+            line-height: 1.6;
+        }
+
+        .cta-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 118, 255, 0.3);
+        }
+
+        .btn-secondary {
+            background-color: var(--surface);
+            color: white;
+            border: 1px solid #333;
+        }
+
+        .btn-secondary:hover {
+            background-color: #222;
+        }
+
+        .features {
+            margin-top: 4rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 2rem;
+            text-align: left;
+        }
+
+        .feature-card {
+            background-color: var(--surface);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid #222;
+        }
+
+        .feature-card h3 {
+            font-size: 1.1rem;
+            margin-top: 0;
+            color: var(--primary);
+        }
+
+        .feature-card p {
+            font-size: 0.9rem;
+            margin-bottom: 0;
+            color: var(--text-secondary);
+        }
+
+        /* Subtle background animation */
+        .bg-glow {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(0, 118, 255, 0.1) 0%, rgba(0, 0, 0, 0) 70%);
+            z-index: 0;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-glow"></div>
+    <div class="container">
+        <h1>Supertonic FastAPI</h1>
+        <p>A production-ready, lightning-fast, and OpenAI-compatible TTS API. Built for scale and developer happiness.
+        </p>
+
+        <div class="cta-group">
+            <a href="/docs" class="btn btn-primary">API Documentation</a>
+            <a href="https://github.com/supertone-inc/supertonic-py" class="btn btn-secondary" target="_blank">GitHub
+                Repository</a>
+        </div>
+
+        <div class="features">
+            <div class="feature-card">
+                <h3>OpenAI Compatible</h3>
+                <p>Drop-in replacement for any app already using OpenAI's TTS platform.</p>
+            </div>
+            <div class="feature-card">
+                <h3>Auto-Chunking</h3>
+                <p>Seamlessly handles long texts by dividing them into manageable units.</p>
+            </div>
+            <div class="feature-card">
+                <h3>High Performance</h3>
+                <p>Optimized for CUDA and CoreML, delivering near-instant speech generation.</p>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

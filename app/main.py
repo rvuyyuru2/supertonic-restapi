@@ -1,4 +1,4 @@
-from robyn import Robyn, jsonify
+from robyn import Robyn, jsonify, Response
 from tortoise import Tortoise
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -37,7 +37,39 @@ async def shutdown():
 
 @app.get("/")
 async def root(request):
-    return jsonify({"message": "Go to /docs or API usage"})
+    try:
+        with open("app/static/index.html", "r") as f:
+            return Response(
+                status_code=200,
+                headers={"Content-Type": "text/html"},
+                description=f.read()
+            )
+    except FileNotFoundError:
+        return jsonify({"message": "Go to /docs or API usage"})
+
+@app.get("/robots.txt")
+async def robots(request):
+    try:
+        with open("app/static/robots.txt", "r") as f:
+            return Response(
+                status_code=200,
+                headers={"Content-Type": "text/plain"},
+                description=f.read()
+            )
+    except FileNotFoundError:
+        return Response(status_code=404, headers={}, description="Not Found")
+
+@app.get("/sitemap.xml")
+async def sitemap(request):
+    try:
+        with open("app/static/sitemap.xml", "r") as f:
+            return Response(
+                status_code=200,
+                headers={"Content-Type": "application/xml"},
+                description=f.read()
+            )
+    except FileNotFoundError:
+        return Response(status_code=404, headers={}, description="Not Found")
 
 @app.get("/health")
 async def health_check(request):
