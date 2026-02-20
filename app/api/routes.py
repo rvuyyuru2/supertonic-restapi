@@ -54,6 +54,11 @@ async def generate_speech(
         media_type = MEDIA_TYPES.get(data.response_format, "audio/wav")
         filename = f"speech.{data.response_format}"
 
+        # Determine model version from model name
+        model_version = None
+        if data.model in ["tts-2", "tts-2-hd", "supertonic-v2"]:
+            model_version = "v2"
+
         start_time = time.time()
 
         try:
@@ -67,6 +72,7 @@ async def generate_speech(
                 writer,
                 speed=data.speed,
                 output_format=data.response_format,
+                model_version=model_version,
             )
 
             total_time = (time.time() - start_time) * 1000
@@ -101,10 +107,20 @@ async def list_models():
     return {
         "data": [
             {"id": "tts-1", "created": 1677610602, "owned_by": "openai"},
+            {"id": "tts-1-hd", "created": 1677610602, "owned_by": "openai"},
+            {"id": "tts-2", "created": 1704067200, "owned_by": "openai"},
+            {"id": "tts-2-hd", "created": 1704067200, "owned_by": "openai"},
             {
                 "id": "supertonic",
                 "created": 1677610602,
                 "owned_by": "supertone",
+                "providers": ort.get_available_providers(),
+            },
+            {
+                "id": "supertonic-v2",
+                "created": 1704067200,
+                "owned_by": "supertone",
+                "version": "2.0",
                 "providers": ort.get_available_providers(),
             },
         ]

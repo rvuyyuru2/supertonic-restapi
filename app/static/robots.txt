@@ -1,3 +1,19 @@
+# https://www.robotstxt.org/robotstxt.html
 User-agent: *
 Allow: /
-Sitemap: https://your-domain.com/sitemap.xml
+
+# Sitemap
+Sitemap: https://github.com/supertoneinc/supertonic-fastapi/raw/main/app/static/sitemap.xml
+
+# Crawl-delay (optional, for politeness)
+Crawl-delay: 1
+
+# Disallow sensitive directories (if any)
+Disallow: /private/
+Disallow: /config/
+Disallow: /.env
+
+# Allow API documentation
+Allow: /docs
+Allow: /redoc
+Allow: /openapi.json

@@ -9,17 +9,22 @@ from app.services.audio import AudioService, AudioNormalizer
 from app.services.streaming_audio_writer import StreamingAudioWriter
 from app.utils.text import smart_split
 from app.core.voices import OPENAI_TO_SUPERTONIC
+from app.core.logging import logger
 
-logger = logging.getLogger("supertonic-api")
+# Force disable xet protocol for HuggingFace downloads
+import os
+os.environ['HF_HUB_DISABLE_XET'] = '1'
 
 
 class TTSService:
     """Singleton TTS service for audio generation."""
     
     _chunk_semaphore = asyncio.Semaphore(settings.MAX_WORKERS)
+    _initialized = False
 
     def __init__(self):
         self.model = None
+        self.model_version = "v1"  # Default to v1, can be set to "v2"
         self._apply_patches()
         
     def _apply_patches(self):
@@ -64,18 +69,38 @@ class TTSService:
         return ["CPUExecutionProvider"]
 
     def initialize(self):
-        """Initialize the TTS model."""
-        logger.info("Initializing Supertonic TTS Model...")
-        kwargs = {}
-        if settings.MODEL_THREADS > 0:
-            kwargs['intra_op_num_threads'] = settings.MODEL_THREADS
-            kwargs['inter_op_num_threads'] = settings.MODEL_INTER_THREADS
+        """Initialize the TTS model - lazy loading."""
+        logger.info("TTS Service initialized (model will load on first request)")
+        self._initialized = True
+
+    def _ensure_model_loaded(self, model_version: str = None):
+        """Ensure model is loaded, lazy load if needed."""
+        # Check if we need to switch model version
+        if model_version and model_version != self.model_version:
+            logger.info(f"Switching model version from {self.model_version} to {model_version}")
+            self.model_version = model_version
+            self.model = None  # Force reload with new version
+        
+        if self.model is None:
+            logger.info(f"Loading Supertonic TTS Model ({self.model_version})...")
+            kwargs = {}
+            if settings.MODEL_THREADS > 0:
+                kwargs['intra_op_num_threads'] = settings.MODEL_THREADS
+                kwargs['inter_op_num_threads'] = settings.MODEL_INTER_THREADS
             
-        self.model = TTS(auto_download=True, **kwargs)
-        logger.info("Supertonic TTS Model initialized.")
+            # Supertonic v2 uses different model ID
+            if self.model_version == "v2":
+                kwargs['model_id'] = "supertonic-tts-v2"
+            else:
+                kwargs['auto_download'] = True
+                
+            self.model = TTS(auto_download=True, **kwargs)
+            logger.info(f"Supertonic TTS Model ({self.model_version}) loaded successfully.")
 
     def get_style(self, voice_name: str):
         """Get voice style from voice name."""
+        self._ensure_model_loaded()
+        
         available = getattr(self.model, "voice_style_names", [])
         target = (
             voice_name
@@ -142,10 +167,10 @@ class TTSService:
         writer: StreamingAudioWriter,
         speed: float = 1.0,
         output_format: str = "wav",
+        model_version: str = None,
     ):
         """Generate audio stream from text."""
-        if not self.model:
-            raise RuntimeError("Model not initialized")
+        self._ensure_model_loaded(model_version)
 
         style = self.get_style(voice)
         stream_normalizer = AudioNormalizer()
@@ -184,12 +209,12 @@ class TTSService:
             if final and final.output:
                 yield final
 
-    async def generate_audio(self, text: str, voice: str, writer: StreamingAudioWriter, speed: float = 1.0, output_format: str = "wav"):
+    async def generate_audio(self, text: str, voice: str, writer: StreamingAudioWriter, speed: float = 1.0, output_format: str = "wav", model_version: str = None):
         """Generate complete audio from text."""
         audio_chunks = []
         all_output_bytes = bytearray()
         
-        async for chunk in self.generate_audio_stream(text, voice, writer, speed, output_format):
+        async for chunk in self.generate_audio_stream(text, voice, writer, speed, output_format, model_version):
             if chunk.output:
                 all_output_bytes.extend(chunk.output)
             if chunk.audio is not None:

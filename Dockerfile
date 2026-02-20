@@ -2,19 +2,29 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies (libsndfile for soundfile, build tools)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     libsndfile1 \
     gcc \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Create cache directories for HuggingFace
+RUN mkdir -p /root/.cache/huggingface/transformers && \
+    mkdir -p /root/.cache/huggingface/hub && \
+    mkdir -p /root/.cache/torch && \
+    chmod -R 777 /root/.cache
+
+# Set environment variables for cache
+ENV HF_HOME=/root/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/root/.cache/huggingface/transformers
+ENV HF_HUB_DISABLE_XET=1
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the app directory
 COPY app/ ./app/
-# Copy scripts if needed or just use command
-
 
 # Environment variables
 ENV PORT=8800
@@ -26,5 +36,5 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8800
 
-# Start with Uvicorn (WORKERS or WEB_CONCURRENCY for compatibility)
+# Start with Uvicorn
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8800} --workers ${WORKERS:-${WEB_CONCURRENCY:-1}}"]

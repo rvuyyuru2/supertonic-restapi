@@ -25,6 +25,7 @@
 - 🐳 **Docker Ready** - Production-ready containerization with nginx
 - 📊 **GPU Acceleration** - Support for CUDA, CoreML, and Metal backends
 - 🔊 **Smart Text Processing** - Automatic text normalization and chunking
+- 🌐 **Multi-Version Support** - Supports both Supertonic v1 and v2 models
 
 ## 📋 Requirements
 
@@ -102,14 +103,14 @@ curl -X POST "http://localhost:8800/v1/audio/speech" \
 
 #### Parameters
 
-| Parameter         | Type    | Default    | Description                                    |
-| ----------------- | ------- | ---------- | ---------------------------------------------- |
-| `model`           | string  | `tts-1`    | TTS model (tts-1 or supertonic)                |
-| `input`           | string  | _required_ | Text to convert (max 4096 chars)               |
-| `voice`           | string  | `alloy`    | Voice: alloy, echo, fable, onyx, nova, shimmer |
-| `response_format` | string  | `mp3`      | Output format: mp3, opus, aac, flac, wav, pcm  |
-| `speed`           | float   | `1.0`      | Speed multiplier (0.25 to 4.0)                 |
-| `normalize`       | boolean | `true`     | Pre-normalize text for better synthesis        |
+| Parameter         | Type    | Default    | Description                                                             |
+| ----------------- | ------- | ---------- | ----------------------------------------------------------------------- |
+| `model`           | string  | `tts-1`    | TTS model (tts-1, tts-1-hd, tts-2, tts-2-hd, supertonic, supertonic-v2) |
+| `input`           | string  | _required_ | Text to convert (max 4096 chars)                                        |
+| `voice`           | string  | `alloy`    | Voice: alloy, echo, fable, onyx, nova, shimmer                          |
+| `response_format` | string  | `mp3`      | Output format: mp3, opus, aac, flac, wav, pcm                           |
+| `speed`           | float   | `1.0`      | Speed multiplier (0.25 to 4.0)                                          |
+| `normalize`       | boolean | `true`     | Pre-normalize text for better synthesis                                 |
 
 ### List Models
 
@@ -168,6 +169,9 @@ FORCE_PROVIDERS=auto  # auto, cuda, coreml, metal, cpu
 # Audio Settings
 SAMPLE_RATE=44100
 gap_trim_ms=100
+
+# Model Version (v1 or v2)
+DEFAULT_MODEL_VERSION=v1
 ```
 
 ### GPU Acceleration

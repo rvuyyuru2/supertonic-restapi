@@ -23,6 +23,9 @@ class Settings(BaseSettings):
         ";": 1.3,
         ":": 1.3
     }
+    
+    # Model Version (v1 or v2 for Supertonic)
+    DEFAULT_MODEL_VERSION: str = "v1"
 
     class Config:
         env_file = ".env"
