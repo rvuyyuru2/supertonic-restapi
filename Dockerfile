@@ -26,5 +26,5 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8800
 
-# Start with Robyn
-CMD ["sh", "-c", "robyn app/main.py --processes ${WEB_CONCURRENCY:-1} --workers ${WORKERS:-1}"]
+# Start with Uvicorn (WORKERS or WEB_CONCURRENCY for compatibility)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8800} --workers ${WORKERS:-${WEB_CONCURRENCY:-1}}"]

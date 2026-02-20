@@ -32,8 +32,6 @@ WORKERS=${WORKERS:-2}
 # Export PYTHONPATH to include current directory for imports
 export PYTHONPATH=$PYTHONPATH:.
 
-echo "Starting Supertonic TTS Production Server on $HOST:$PORT with Robyn..."
+echo "Starting Supertonic TTS Production Server on $HOST:$PORT with FastAPI..."
 
-# Use Robyn's built-in multi-process manager
-# Gunicorn is not compatible because Robyn manages its own Rust-based runtime/server.
-exec robyn app/main.py --processes $WEB_CONCURRENCY --workers $WORKERS
+exec uvicorn app.main:app --host $HOST --port $PORT --workers $WORKERS

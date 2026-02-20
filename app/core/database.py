@@ -27,7 +27,6 @@ async def verify_api_key(request):
     Verifies the Bearer token provided in the Authorization header.
     """
     headers = request.headers
-    # Robyn headers are often a specialized dict-like object
     auth_header = headers.get("Authorization") or headers.get("authorization")
     
     if not auth_header:

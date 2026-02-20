@@ -8,11 +8,14 @@ from app.inference.base import AudioChunk
 from app.services.audio import AudioService, AudioNormalizer
 from app.services.streaming_audio_writer import StreamingAudioWriter
 from app.utils.text import smart_split
-from app.api.schemas import NormalizationOptions
+from app.core.voices import OPENAI_TO_SUPERTONIC
 
 logger = logging.getLogger("supertonic-api")
 
+
 class TTSService:
+    """Singleton TTS service for audio generation."""
+    
     _chunk_semaphore = asyncio.Semaphore(settings.MAX_WORKERS)
 
     def __init__(self):
@@ -20,34 +23,14 @@ class TTSService:
         self._apply_patches()
         
     def _apply_patches(self):
+        """Patch ONNX Runtime to use configured providers."""
         try:
             _original_session_init = ort.InferenceSession.__init__
             force_provider = settings.FORCE_PROVIDERS
             
             def _patched_session_init(session_self, path_or_bytes, *args, **kwargs):
                 available = ort.get_available_providers()
-                selected_providers = []
-                
-                if force_provider == "cuda" and "CUDAExecutionProvider" in available:
-                    selected_providers = ["CUDAExecutionProvider"]
-                elif force_provider == "coreml" and "CoreMLExecutionProvider" in available:
-                    selected_providers = ["CoreMLExecutionProvider"]
-                elif force_provider == "metal":
-                    if "CoreMLExecutionProvider" in available:
-                        selected_providers = ["CoreMLExecutionProvider"]
-                    else:
-                        logger.warning("Metal/CoreML requested but not available. Falling back to CPU.")
-                        selected_providers = ["CPUExecutionProvider"]
-                elif force_provider == "cpu":
-                    selected_providers = ["CPUExecutionProvider"]
-                elif force_provider == "auto":
-                    if "CUDAExecutionProvider" in available: selected_providers.append("CUDAExecutionProvider")
-                    if "CoreMLExecutionProvider" in available: selected_providers.append("CoreMLExecutionProvider")
-                    selected_providers.append("CPUExecutionProvider")
-                
-                if not selected_providers:
-                     selected_providers = ["CPUExecutionProvider"]
-
+                selected_providers = self._select_providers(force_provider, available)
                 kwargs["providers"] = selected_providers
                 logger.debug(f"Patched ORT Session providers: {selected_providers}")
                 _original_session_init(session_self, path_or_bytes, *args, **kwargs)
@@ -57,7 +40,31 @@ class TTSService:
         except Exception as e:
             logger.warning(f"Could not patch onnxruntime: {e}")
 
+    def _select_providers(self, force_provider: str, available: list) -> list:
+        """Select ONNX providers based on configuration."""
+        if force_provider == "cuda" and "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider"]
+        elif force_provider == "coreml" and "CoreMLExecutionProvider" in available:
+            return ["CoreMLExecutionProvider"]
+        elif force_provider == "metal":
+            if "CoreMLExecutionProvider" in available:
+                return ["CoreMLExecutionProvider"]
+            logger.warning("Metal/CoreML requested but not available. Falling back to CPU.")
+            return ["CPUExecutionProvider"]
+        elif force_provider == "cpu":
+            return ["CPUExecutionProvider"]
+        elif force_provider == "auto":
+            providers = []
+            if "CUDAExecutionProvider" in available:
+                providers.append("CUDAExecutionProvider")
+            if "CoreMLExecutionProvider" in available:
+                providers.append("CoreMLExecutionProvider")
+            providers.append("CPUExecutionProvider")
+            return providers
+        return ["CPUExecutionProvider"]
+
     def initialize(self):
+        """Initialize the TTS model."""
         logger.info("Initializing Supertonic TTS Model...")
         kwargs = {}
         if settings.MODEL_THREADS > 0:
@@ -68,12 +75,13 @@ class TTSService:
         logger.info("Supertonic TTS Model initialized.")
 
     def get_style(self, voice_name: str):
-        VOICE_MAP = {
-            "alloy": "F1", "echo": "M1", "fable": "M2", "onyx": "M3",
-            "nova": "F2", "shimmer": "F3"
-        }
-        available = getattr(self.model, 'voice_style_names', [])
-        target = voice_name if voice_name in available else VOICE_MAP.get(voice_name, available[0] if available else "F1")
+        """Get voice style from voice name."""
+        available = getattr(self.model, "voice_style_names", [])
+        target = (
+            voice_name
+            if voice_name in available
+            else OPENAI_TO_SUPERTONIC.get(voice_name, available[0] if available else "F1")
+        )
         return self.model.get_voice_style(voice_name=target)
 
     async def _process_chunk(
@@ -86,8 +94,10 @@ class TTSService:
         is_last: bool = False,
         normalizer: AudioNormalizer = None,
     ):
+        """Process a single text chunk and return audio data."""
         async with self._chunk_semaphore:
             try:
+                # Handle final chunk (flush)
                 if is_last:
                     chunk_data = await AudioService.convert_audio(
                         AudioChunk(np.array([], dtype=np.float32), sample_rate=self.model.sample_rate),
@@ -99,31 +109,28 @@ class TTSService:
                     return None
 
                 loop = asyncio.get_event_loop()
-                logger.debug(f"Synthesizing: textlen={len(chunk_text)}, style={type(style)}, speed={speed}({type(speed)})")
-                try:
-                    wav, _ = await loop.run_in_executor(
-                        None,
-                        lambda: self.model.synthesize(chunk_text, style, speed=speed)
-                    )
-                except Exception as ex:
-                    logger.error(f"Synthesize failed: {ex}")
-                    raise ex
+                logger.debug(f"Synthesizing: textlen={len(chunk_text)}, speed={speed}")
+                
+                # Run synthesis in thread pool
+                wav, _ = await loop.run_in_executor(
+                    None,
+                    lambda: self.model.synthesize(chunk_text, style, speed=speed)
+                )
 
                 logger.debug(f"Synthesized: shape={wav.shape}, dtype={wav.dtype}")
 
+                # Handle 2D audio arrays
                 if wav.ndim == 2 and wav.shape[0] == 1:
                     wav = wav.squeeze()
 
                 audio_chunk = AudioChunk(audio=wav, sample_rate=self.model.sample_rate, text=chunk_text)
                 
-                logger.debug("Converting audio chunk...")
                 return await AudioService.convert_audio(
                     audio_chunk, output_format, writer, speed, chunk_text,
                     is_last_chunk=is_last, normalizer=normalizer,
                 )
             except Exception as e:
                 logger.error(f"Failed to process chunk: {e}")
-                # Print traceback to be sure
                 import traceback
                 logger.error(traceback.format_exc())
                 return None
@@ -135,8 +142,8 @@ class TTSService:
         writer: StreamingAudioWriter,
         speed: float = 1.0,
         output_format: str = "wav",
-        normalization_options: NormalizationOptions = NormalizationOptions(),
     ):
+        """Generate audio stream from text."""
         if not self.model:
             raise RuntimeError("Model not initialized")
 
@@ -145,7 +152,8 @@ class TTSService:
         stream_normalizer.sample_rate = self.model.sample_rate
         chunk_index = 0
 
-        async for chunk_text, tokens, pause_duration_s in smart_split(text, normalization_options=normalization_options):
+        async for chunk_text, tokens, pause_duration_s in smart_split(text):
+            # Handle pause tags
             if pause_duration_s and pause_duration_s > 0:
                 silence_samples = int(pause_duration_s * self.model.sample_rate)
                 silence_audio = np.zeros(silence_samples, dtype=np.int16)
@@ -167,6 +175,7 @@ class TTSService:
                     yield processed
                 chunk_index += 1
 
+        # Finalize stream
         if chunk_index > 0:
             final = await self._process_chunk(
                 "", style, speed, writer, output_format,
@@ -175,11 +184,12 @@ class TTSService:
             if final and final.output:
                 yield final
 
-    async def generate_audio(self, text, voice, writer, speed=1.0, output_format="wav"):
+    async def generate_audio(self, text: str, voice: str, writer: StreamingAudioWriter, speed: float = 1.0, output_format: str = "wav"):
+        """Generate complete audio from text."""
         audio_chunks = []
         all_output_bytes = bytearray()
         
-        async for chunk in self.generate_audio_stream(text, voice, writer, speed, output_format=output_format):
+        async for chunk in self.generate_audio_stream(text, voice, writer, speed, output_format):
             if chunk.output:
                 all_output_bytes.extend(chunk.output)
             if chunk.audio is not None:
@@ -189,5 +199,6 @@ class TTSService:
         combined.output = bytes(all_output_bytes)
         return combined
 
-# Singleton
+
+# Singleton instance
 tts_service = TTSService()

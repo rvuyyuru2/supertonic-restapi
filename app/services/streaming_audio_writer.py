@@ -1,15 +1,17 @@
-import struct
 from io import BytesIO
 from typing import Optional
 import av
 import numpy as np
 from loguru import logger
 
+
 class PipeIO:
     """
     A wrapper around a file-like object that exposes only write/tell/flush
     to trick PyAV into treating it as a non-seekable stream (like a pipe).
     """
+    __slots__ = ('buffer',)
+    
     def __init__(self, buffer):
         self.buffer = buffer
 
@@ -22,59 +24,57 @@ class PipeIO:
     def flush(self):
         return self.buffer.flush()
 
+
 class StreamingAudioWriter:
     """Handles streaming audio format conversions using PyAV for efficient encoding."""
+    
+    # Codec mappings as class constant
+    CODEC_MAP = {
+        "wav": "pcm_s16le",
+        "mp3": "mp3",
+        "opus": "libopus",
+        "flac": "flac",
+        "aac": "aac",
+    }
 
     def __init__(self, format: str, sample_rate: int, channels: int = 1):
         self.format = format.lower()
         self.sample_rate = sample_rate
         self.channels = channels
-        self.bytes_written = 0
         self.pts = 0
 
-        codec_map = {
-            "wav": "pcm_s16le",
-            "mp3": "mp3",
-            "opus": "libopus",
-            "flac": "flac",
-            "aac": "aac",
-        }
-        
-        # Format-specific setup
-        if self.format in ["wav", "flac", "mp3", "pcm", "aac", "opus"]:
-            if self.format != "pcm":
-                self.output_buffer = BytesIO()
-                container_options = {}
-                
-                # Check for mp3 
-                if self.format == 'mp3':
-                    # Disable Xing VBR header prevents seeking back
-                    container_options = {'write_xing': '0'}
-                    logger.debug("Disabling Xing VBR header for MP3 encoding.")
+        if self.format == "pcm":
+            # PCM is raw audio, no container needed
+            self.container = None
+            self.stream = None
+            self.output_buffer = None
+        elif self.format in self.CODEC_MAP:
+            self.output_buffer = BytesIO()
+            
+            container_options = {}
+            if self.format == 'mp3':
+                container_options = {'write_xing': '0'}
 
-                # Use PipeIO wrapper to enforce streaming mode
-                self.container = av.open(
-                    PipeIO(self.output_buffer),
-                    mode="w",
-                    format=self.format if self.format != "aac" else "adts",
-                    options=container_options
-                )
-                self.stream = self.container.add_stream(
-                    codec_map[self.format],
-                    rate=self.sample_rate,
-                    layout="mono" if self.channels == 1 else "stereo",
-                )
-                
-                if self.format in ['mp3', 'aac', 'opus']:
-                    self.stream.bit_rate = 128000
+            self.container = av.open(
+                PipeIO(self.output_buffer),
+                mode="w",
+                format=self.format if self.format != "aac" else "adts",
+                options=container_options
+            )
+            self.stream = self.container.add_stream(
+                self.CODEC_MAP[self.format],
+                rate=self.sample_rate,
+                layout="mono" if self.channels == 1 else "stereo",
+            )
+            
+            if self.format in ['mp3', 'aac', 'opus']:
+                self.stream.bit_rate = 128000
         else:
             raise ValueError(f"Unsupported format: {self.format}")
 
     def close(self):
-        # The container is now closed explicitly in write_chunk for finalize
-        # to handle potential seek errors with PipeIO.
-        # We only need to ensure the output_buffer is closed if it exists.
-        if hasattr(self, "output_buffer"):
+        """Close and cleanup resources."""
+        if hasattr(self, "output_buffer") and self.output_buffer:
             self.output_buffer.close()
 
     def write_chunk(
@@ -86,31 +86,27 @@ class StreamingAudioWriter:
             audio_data: Audio data to write, or None if finalizing
             finalize: Whether this is the final write to close the stream
         """
-
         if finalize:
-            if self.format != "pcm":
-                # Flush stream encoder
-                try:
-                    packets = self.stream.encode(None)
-                    for packet in packets:
-                        self.container.mux(packet)
-                except Exception as e:
-                    logger.warning(f"Error flushing encoder: {e}")
+            if self.format == "pcm":
+                return b""
+            
+            # Flush stream encoder
+            try:
+                for packet in self.stream.encode(None):
+                    self.container.mux(packet)
+            except Exception as e:
+                logger.warning(f"Error flushing encoder: {e}")
 
-                logger.debug("Muxed final packets.")
-                
-                # Close container to flush footer
-                try:
-                    self.container.close()
-                except Exception as e:
-                    # Ignore seek errors on close since we are streaming
-                    logger.debug(f"Container close (expected if pipe): {e}")
+            # Close container to flush footer
+            try:
+                self.container.close()
+            except Exception as e:
+                logger.debug(f"Container close (expected if pipe): {e}")
 
-                # Get the final bytes
-                data = self.output_buffer.getvalue()
-                self.output_buffer.close()
-                return data
-            return b""
+            # Get the final bytes
+            data = self.output_buffer.getvalue()
+            self.output_buffer.close()
+            return data
 
         if audio_data is None or len(audio_data) == 0:
             return b""
@@ -118,27 +114,25 @@ class StreamingAudioWriter:
         if self.format == "pcm":
             # Write raw bytes
             return audio_data.tobytes()
-        else:
-            # Ensure audio_data is s16 (int16) as expected by the default format
-            if audio_data.dtype != np.int16:
-                audio_data = (audio_data * 32767).astype(np.int16)
 
-            frame = av.AudioFrame.from_ndarray(
-                audio_data.reshape(1, -1),
-                format="s16",
-                layout="mono" if self.channels == 1 else "stereo",
-            )
-            frame.sample_rate = self.sample_rate
+        # Ensure audio_data is int16 as expected by the encoder
+        if audio_data.dtype != np.int16:
+            audio_data = (audio_data * 32767).astype(np.int16)
 
-            frame.pts = self.pts
-            self.pts += frame.samples
+        frame = av.AudioFrame.from_ndarray(
+            audio_data.reshape(1, -1),
+            format="s16",
+            layout="mono" if self.channels == 1 else "stereo",
+        )
+        frame.sample_rate = self.sample_rate
+        frame.pts = self.pts
+        self.pts += frame.samples
 
-            packets = self.stream.encode(frame)
-            for packet in packets:
-                self.container.mux(packet)
+        for packet in self.stream.encode(frame):
+            self.container.mux(packet)
 
-            data = self.output_buffer.getvalue()
-            # Reset buffer for next chunk
-            self.output_buffer.seek(0)
-            self.output_buffer.truncate(0)
-            return data
+        data = self.output_buffer.getvalue()
+        # Reset buffer for next chunk
+        self.output_buffer.seek(0)
+        self.output_buffer.truncate(0)
+        return data

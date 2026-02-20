@@ -6,7 +6,7 @@ import statistics
 from dataclasses import dataclass
 from typing import List, Optional
 
-API_URL = "http://localhost:8800/v1/audio/speech"
+API_URL = "http://localhost:8000/v1/audio/speech"
 API_KEY = "rLKAAK9R8d2qiqZo7ijUvfEon-BwvupDzeBzJjMko_Q"
 CONCURRENT_REQUESTS = 25
 TOTAL_REQUESTS = 500

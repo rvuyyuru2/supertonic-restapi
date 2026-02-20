@@ -1,4 +1,5 @@
-robyn
+fastapi
+uvicorn[standard]
 supertonic
 numpy
 soundfile

@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Configuration
-API_BASE_URL = "http://localhost:8800"
-API_KEY = "YOUR_API_KEY_HERE" # Replace with valid key after creation
+API_BASE_URL = "http://localhost:8000"
+API_KEY = "test" # Replace with valid key after creation
 OUTPUT_DIR = "tests/output"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -158,9 +158,9 @@ async def main():
     if not api_key or api_key == "YOUR_API_KEY_HERE":
         api_key = await create_api_key()
     
-    if not api_key:
-        logger.error("No API key available. Start the server and create a key.")
-        return
+    # if not api_key:
+    #     logger.error("No API key available. Start the server and create a key.")
+    #     return
 
     await test_simple_synthesis(api_key)
     await test_all_voices(api_key)
